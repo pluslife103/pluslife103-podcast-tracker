@@ -8,9 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import desc
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from models import SessionLocal, Episode
+from models import SessionLocal, Episode, add_missing_columns
 from rss import fetch_episodes, migrate_pub_dates
 from transcribe import transcribe_episode
+from analyze import analyze_episode
 
 app = FastAPI(title="股癌 Podcast Tracker")
 app.add_middleware(
@@ -43,6 +44,7 @@ def _auto_sync():
 
 @app.on_event("startup")
 def startup():
+    add_missing_columns()
     migrate_pub_dates()
     fetch_episodes()
     scheduler.add_job(_auto_sync, "interval", hours=1, id="auto_sync")
@@ -103,6 +105,27 @@ def trigger_transcribe(ep_id: int, bg: BackgroundTasks):
     return {"status": "queued"}
 
 
+@app.post("/api/episodes/{ep_id}/analyze")
+def trigger_analyze(ep_id: int, bg: BackgroundTasks):
+    db = SessionLocal()
+    try:
+        ep = db.query(Episode).filter(Episode.id == ep_id).first()
+        if not ep:
+            raise HTTPException(404, "Episode not found")
+        if ep.status != "done" or not ep.transcript:
+            return {"status": "transcript_not_ready"}
+        if ep.analysis_status == "analyzing":
+            return {"status": "analyzing"}
+        if ep.analysis_status == "done":
+            return {"status": "done"}
+        ep.analysis_status = "pending"
+        db.commit()
+    finally:
+        db.close()
+    bg.add_task(analyze_episode, ep_id)
+    return {"status": "queued"}
+
+
 @app.post("/api/sync")
 def sync(bg: BackgroundTasks):
     bg.add_task(fetch_episodes)
@@ -110,6 +133,15 @@ def sync(bg: BackgroundTasks):
 
 
 def _ep_dict(ep: Episode, include_transcript: bool = False) -> dict:
+    import json as _json
+    def _load(val):
+        if not val:
+            return []
+        try:
+            return _json.loads(val)
+        except Exception:
+            return []
+
     d = {
         "id": ep.id,
         "title": ep.title,
@@ -119,6 +151,11 @@ def _ep_dict(ep: Episode, include_transcript: bool = False) -> dict:
         "status": ep.status,
         "error_msg": ep.error_msg,
         "updated_at": ep.updated_at.isoformat() if ep.updated_at else None,
+        "analysis_status": ep.analysis_status or "pending",
+        "rec_stocks": _load(ep.rec_stocks),
+        "unrec_stocks": _load(ep.unrec_stocks),
+        "rec_industries": _load(ep.rec_industries),
+        "unrec_industries": _load(ep.unrec_industries),
     }
     if include_transcript:
         d["transcript"] = ep.transcript

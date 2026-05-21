@@ -14,6 +14,11 @@ interface Episode {
   error_msg: string | null;
   transcript: string | null;
   updated_at: string | null;
+  analysis_status: "pending" | "analyzing" | "done" | "error";
+  rec_stocks: string[];
+  unrec_stocks: string[];
+  rec_industries: string[];
+  unrec_industries: string[];
 }
 
 function formatDate(raw: string): string {
@@ -45,11 +50,41 @@ function formatDuration(raw: string): string {
   return raw;
 }
 
+function AnalysisGroup({
+  label,
+  items,
+  chipClass,
+  emptyText,
+}: {
+  label: string;
+  items: string[];
+  chipClass: string;
+  emptyText: string;
+}) {
+  return (
+    <div>
+      <p className="text-xs text-gray-400 mb-1.5 font-medium">{label}</p>
+      {items?.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {items.map((s) => (
+            <span key={s} className={`text-xs px-2 py-0.5 rounded font-medium ${chipClass}`}>
+              {s}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <span className="text-xs text-gray-600">{emptyText}</span>
+      )}
+    </div>
+  );
+}
+
 export default function EpisodePage() {
   const { id } = useParams<{ id: string }>();
   const [ep, setEp] = useState<Episode | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
 
   const loadEpisode = useCallback(async () => {
     try {
@@ -80,6 +115,20 @@ export default function EpisodePage() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
+
+  async function handleAnalyze() {
+    setAnalyzing(true);
+    await fetch(`/api/episodes/${id}/analyze`, { method: "POST" });
+    await loadEpisode();
+    setAnalyzing(false);
+  }
+
+  // Poll while analyzing
+  useEffect(() => {
+    if (!ep || ep.analysis_status !== "analyzing") return;
+    const interval = setInterval(loadEpisode, 4000);
+    return () => clearInterval(interval);
+  }, [ep, loadEpisode]);
 
   if (loading) {
     return (
@@ -120,6 +169,66 @@ export default function EpisodePage() {
           </p>
         )}
       </div>
+
+      {/* Analysis section */}
+      {ep.status === "done" && (
+        <div className="border border-gray-800 rounded-xl overflow-hidden mb-4">
+          <div className="flex items-center justify-between px-4 py-3 bg-gray-900 border-b border-gray-800">
+            <h2 className="text-sm font-semibold text-gray-300">AI 分析摘要</h2>
+            {(ep.analysis_status === "pending" || ep.analysis_status === "error") && (
+              <button
+                onClick={handleAnalyze}
+                disabled={analyzing}
+                className="text-xs px-3 py-1 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 rounded-lg font-medium transition-colors"
+              >
+                {analyzing ? "排程中…" : "開始分析"}
+              </button>
+            )}
+          </div>
+          <div className="p-4 bg-gray-900/50">
+            {ep.analysis_status === "done" ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <AnalysisGroup
+                  label="📈 推薦股票"
+                  items={ep.rec_stocks}
+                  chipClass="bg-green-900/60 text-green-300"
+                  emptyText="無"
+                />
+                <AnalysisGroup
+                  label="📉 不推薦股票"
+                  items={ep.unrec_stocks}
+                  chipClass="bg-red-900/60 text-red-300"
+                  emptyText="無"
+                />
+                <AnalysisGroup
+                  label="🏭 推薦產業"
+                  items={ep.rec_industries}
+                  chipClass="bg-emerald-900/60 text-emerald-300"
+                  emptyText="無"
+                />
+                <AnalysisGroup
+                  label="🚫 不推薦產業"
+                  items={ep.unrec_industries}
+                  chipClass="bg-orange-900/60 text-orange-300"
+                  emptyText="無"
+                />
+              </div>
+            ) : ep.analysis_status === "analyzing" ? (
+              <div className="flex items-center gap-2 py-4 justify-center text-yellow-400 text-sm">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                AI 分析中，約需 10-20 秒…
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500 py-3 text-center">
+                點擊「開始分析」用 AI 提取本集推薦/不推薦的股票和產業
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Transcript area */}
       <div className="border border-gray-800 rounded-xl overflow-hidden">
