@@ -4,7 +4,7 @@ const config = {
     return [
       {
         source: "/api/:path*",
-        destination: `${process.env.BACKEND_URL || "http://localhost:8000"}/api/:path*`,
+        destination: `${(process.env.BACKEND_URL || "http://localhost:8000").replace(/^﻿/, "").trim()}/api/:path*`,
       },
     ];
   },
